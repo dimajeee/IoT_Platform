@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: iot
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: iot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot -d iot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  backend:
+    build:
+      context: .
+      dockerfile: build/backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      BACKEND_HTTP_ADDR: ":8080"
+      BACKEND_MQTT_BROKER: "tcp://mosquitto:1883"
+      BACKEND_MQTT_CLIENT_ID: "backend-service"
+      BACKEND_MQTT_TOPIC: "iot/sensors/+/telemetry"
+      BACKEND_POSTGRES_DSN: "postgres://iot:iot@postgres:5432/iot?sslmode=disable"
+      BACKEND_REDIS_ADDR: "redis:6379"
+      BACKEND_REDIS_PASSWORD: ""
+      BACKEND_REDIS_DB: "0"
+      BACKEND_LOG_LEVEL: "info"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+  gateway:
+    build:
+      context: .
+      dockerfile: build/gateway/Dockerfile
+    environment:
+      GATEWAY_MQTT_BROKER: "tcp://mosquitto:1883"
+      GATEWAY_MQTT_CLIENT_ID: "gateway-service"
+      GATEWAY_PUBLISH_INTERVAL: "5s"
+      GATEWAY_LOG_LEVEL: "info"
+    depends_on:
+      mosquitto:
+        condition: service_started
+
+volumes:
+  postgres_data:
