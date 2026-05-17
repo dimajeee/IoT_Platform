@@ -25,7 +25,12 @@ func NewGateway(cfg config.Gateway, logger *slog.Logger) (*Gateway, error) {
 }
 
 func (a *Gateway) Run(ctx context.Context) error {
-	publisher, err := mqtttransport.NewPublisher(a.cfg.MQTTBroker, a.cfg.MQTTClientID, a.logger)
+	publisher, err := mqtttransport.NewPublisher(mqtttransport.PublisherConfig{
+		BrokerURL: a.cfg.MQTTBrokerURL(),
+		ClientID:  a.cfg.MQTTClientID,
+		Username:  a.cfg.MQTTUsername,
+		Password:  a.cfg.MQTTPassword,
+	}, a.logger)
 	if err != nil {
 		return fmt.Errorf("create mqtt publisher: %w", err)
 	}

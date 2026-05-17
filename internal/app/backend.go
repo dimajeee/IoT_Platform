@@ -13,6 +13,7 @@ import (
 	redisstorage "github.com/dmitrijsterligov/iot-platform/internal/storage/redis"
 	httptransport "github.com/dmitrijsterligov/iot-platform/internal/transport/http"
 	mqtttransport "github.com/dmitrijsterligov/iot-platform/internal/transport/mqtt"
+	deviceusecase "github.com/dmitrijsterligov/iot-platform/internal/usecase/device"
 	telemetryusecase "github.com/dmitrijsterligov/iot-platform/internal/usecase/telemetry"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -56,18 +57,32 @@ func (a *Backend) Run(ctx context.Context) error {
 	service := telemetryusecase.NewService(repository, cache)
 	queryService := telemetryusecase.NewQueryService(repository, cache)
 
-	subscriber, err := mqtttransport.NewSubscriber(
-		a.cfg.MQTTBroker,
-		a.cfg.MQTTClientID,
-		a.cfg.MQTTTopic,
-		a.logger,
-		service,
-	)
+	subscriber, err := mqtttransport.NewSubscriber(mqtttransport.SubscriberConfig{
+		BrokerURL:          a.cfg.MQTTBrokerURL(),
+		ClientID:           a.cfg.MQTTClientID,
+		Username:           a.cfg.MQTTUsername,
+		Password:           a.cfg.MQTTPassword,
+		Topic:              a.cfg.MQTTTopic,
+		Decoder:            a.cfg.MQTTDecoder,
+		SensorIDTopicLevel: a.cfg.MQTTSensorIDTopicPos,
+	}, a.logger, service)
 	if err != nil {
 		return fmt.Errorf("create mqtt subscriber: %w", err)
 	}
 
-	httpServer := httptransport.NewServer(a.cfg.HTTPAddr, a.logger, queryService)
+	publisher, err := mqtttransport.NewPublisher(mqtttransport.PublisherConfig{
+		BrokerURL: a.cfg.MQTTBrokerURL(),
+		ClientID:  a.cfg.MQTTClientID + "-commands",
+		Username:  a.cfg.MQTTUsername,
+		Password:  a.cfg.MQTTPassword,
+	}, a.logger)
+	if err != nil {
+		return fmt.Errorf("create mqtt command publisher: %w", err)
+	}
+	defer publisher.Close()
+
+	commandService := deviceusecase.NewCommandService(publisher, a.cfg.MQTTCommandTopic)
+	httpServer := httptransport.NewServer(a.cfg.HTTPAddr, a.logger, queryService, commandService)
 
 	a.logger.Info("backend started")
 

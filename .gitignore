@@ -1,3 +1,8 @@
 .DS_Store
+.env
 /backend
 /gateway
+/hardware-gateway
+/docs/*.docx
+/docs/*.pptx
+/deploy/mosquitto/

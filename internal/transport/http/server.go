@@ -20,17 +20,23 @@ type TelemetryQueryService interface {
 	ListLatest(ctx context.Context) ([]domain.Telemetry, error)
 }
 
-type Server struct {
-	addr    string
-	logger  *slog.Logger
-	service TelemetryQueryService
+type DeviceCommandService interface {
+	SetInterval(ctx context.Context, interval string) error
 }
 
-func NewServer(addr string, logger *slog.Logger, service TelemetryQueryService) *Server {
+type Server struct {
+	addr           string
+	logger         *slog.Logger
+	service        TelemetryQueryService
+	commandService DeviceCommandService
+}
+
+func NewServer(addr string, logger *slog.Logger, service TelemetryQueryService, commandService DeviceCommandService) *Server {
 	return &Server{
-		addr:    addr,
-		logger:  logger,
-		service: service,
+		addr:           addr,
+		logger:         logger,
+		service:        service,
+		commandService: commandService,
 	}
 }
 
@@ -41,6 +47,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/v1/telemetry", s.handleListTelemetry)
 	mux.HandleFunc("GET /api/v1/sensors/latest", s.handleListLatest)
 	mux.HandleFunc("GET /api/v1/sensors/{sensorID}/latest", s.handleGetLatest)
+	mux.HandleFunc("POST /api/v1/device/interval", s.handleSetInterval)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /swagger", s.handleSwaggerUI)
 
@@ -147,6 +154,27 @@ func (s *Server) handleGetLatest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) handleSetInterval(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Interval string `json:"interval"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("decode request body: %v", err))
+		return
+	}
+
+	if err := s.commandService.SetInterval(r.Context(), request.Interval); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "published",
+		"interval": strings.TrimSpace(request.Interval),
+	})
+}
+
 func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, openAPISpec())
 }
@@ -237,6 +265,40 @@ func openAPISpec() map[string]any {
 					},
 				},
 			},
+			"/api/v1/device/interval": map[string]any{
+				"post": map[string]any{
+					"summary": "Set ESP32 telemetry publish interval",
+					"requestBody": map[string]any{
+						"required": true,
+						"content": map[string]any{
+							"application/json": map[string]any{
+								"schema": map[string]any{
+									"$ref": "#/components/schemas/SetIntervalRequest",
+								},
+								"examples": map[string]any{
+									"seconds": map[string]any{
+										"value": map[string]any{"interval": "2s"},
+									},
+									"minutes": map[string]any{
+										"value": map[string]any{"interval": "3m"},
+									},
+									"hours": map[string]any{
+										"value": map[string]any{"interval": "4h"},
+									},
+								},
+							},
+						},
+					},
+					"responses": map[string]any{
+						"200": map[string]any{
+							"description": "Interval command published",
+						},
+						"400": map[string]any{
+							"description": "Invalid interval format",
+						},
+					},
+				},
+			},
 		},
 		"components": map[string]any{
 			"schemas": map[string]any{
@@ -248,6 +310,18 @@ func openAPISpec() map[string]any {
 						"value":       map[string]any{"type": "number"},
 						"unit":        map[string]any{"type": "string"},
 						"recorded_at": map[string]any{"type": "string", "format": "date-time"},
+					},
+				},
+				"SetIntervalRequest": map[string]any{
+					"type":     "object",
+					"required": []string{"interval"},
+					"properties": map[string]any{
+						"interval": map[string]any{
+							"type":        "string",
+							"pattern":     "^[1-9][0-9]*(s|m|h)$",
+							"example":     "2s",
+							"description": "Interval with unit: s, m or h",
+						},
 					},
 				},
 			},
