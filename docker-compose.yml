@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: iot
-      POSTGRES_USER: iot
-      POSTGRES_PASSWORD: iot
+      POSTGRES_DB: "${POSTGRES_DB:-iot}"
+      POSTGRES_USER: "${POSTGRES_USER:-iot}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-iot}"
     ports:
       - "5432:5432"
     volumes:
@@ -18,15 +18,28 @@ services:
 
   redis:
     image: redis:7-alpine
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        fi
+        exec redis-server --appendonly yes
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$${REDIS_PASSWORD}\" ]; then redis-cli -a \"$${REDIS_PASSWORD}\" ping; else redis-cli ping; fi"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   backend:
+    image: "${BACKEND_IMAGE:-iot-backend-image:local}"
     build:
       context: .
       dockerfile: build/backend/Dockerfile
@@ -43,9 +56,9 @@ services:
       BACKEND_MQTT_DECODER: "${MQTT_DECODER:-esp32-topic-value}"
       BACKEND_MQTT_SENSOR_ID_TOPIC_POS: "${MQTT_SENSOR_ID_TOPIC_POS:--1}"
       BACKEND_MQTT_COMMAND_TOPIC: "${MQTT_COMMAND_TOPIC:-/esp32/interval}"
-      BACKEND_POSTGRES_DSN: "postgres://iot:iot@postgres:5432/iot?sslmode=disable"
+      BACKEND_POSTGRES_DSN: "postgres://${POSTGRES_USER:-iot}:${POSTGRES_PASSWORD:-iot}@postgres:5432/${POSTGRES_DB:-iot}?sslmode=disable"
       BACKEND_REDIS_ADDR: "redis:6379"
-      BACKEND_REDIS_PASSWORD: ""
+      BACKEND_REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
       BACKEND_REDIS_DB: "0"
       BACKEND_LOG_LEVEL: "info"
     depends_on:
@@ -89,3 +102,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

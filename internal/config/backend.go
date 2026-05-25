@@ -14,6 +14,7 @@ type Backend struct {
 	MQTTUsername         string
 	MQTTPassword         string
 	MQTTClientID         string
+	InstanceID           string
 	MQTTTopic            string
 	MQTTDecoder          string
 	MQTTSensorIDTopicPos int
@@ -33,6 +34,7 @@ func MustLoadBackend() Backend {
 		MQTTUsername:         getEnv("BACKEND_MQTT_USERNAME", ""),
 		MQTTPassword:         getEnv("BACKEND_MQTT_PASSWORD", ""),
 		MQTTClientID:         getEnv("BACKEND_MQTT_CLIENT_ID", "backend-service"),
+		InstanceID:           getEnv("BACKEND_INSTANCE_ID", ""),
 		MQTTTopic:            getEnv("BACKEND_MQTT_TOPIC", "/esp32/+/+"),
 		MQTTDecoder:          getEnv("BACKEND_MQTT_DECODER", "esp32-topic-value"),
 		MQTTSensorIDTopicPos: getEnvAsInt("BACKEND_MQTT_SENSOR_ID_TOPIC_POS", -1),
@@ -47,6 +49,14 @@ func MustLoadBackend() Backend {
 
 func (c Backend) MQTTBrokerURL() string {
 	return fmt.Sprintf("tcp://%s:%d", c.MQTTHost, c.MQTTPort)
+}
+
+func (c Backend) RuntimeMQTTClientID() string {
+	if c.InstanceID == "" {
+		return c.MQTTClientID
+	}
+
+	return fmt.Sprintf("%s-%s", c.MQTTClientID, c.InstanceID)
 }
 
 func getEnv(key, fallback string) string {

@@ -24,19 +24,31 @@ type DeviceCommandService interface {
 	SetInterval(ctx context.Context, interval string) error
 }
 
-type Server struct {
-	addr           string
-	logger         *slog.Logger
-	service        TelemetryQueryService
-	commandService DeviceCommandService
+type ReadinessChecker interface {
+	Ready(ctx context.Context) error
 }
 
-func NewServer(addr string, logger *slog.Logger, service TelemetryQueryService, commandService DeviceCommandService) *Server {
+type Server struct {
+	addr             string
+	logger           *slog.Logger
+	service          TelemetryQueryService
+	commandService   DeviceCommandService
+	readinessChecker ReadinessChecker
+}
+
+func NewServer(
+	addr string,
+	logger *slog.Logger,
+	service TelemetryQueryService,
+	commandService DeviceCommandService,
+	readinessChecker ReadinessChecker,
+) *Server {
 	return &Server{
-		addr:           addr,
-		logger:         logger,
-		service:        service,
-		commandService: commandService,
+		addr:             addr,
+		logger:           logger,
+		service:          service,
+		commandService:   commandService,
+		readinessChecker: readinessChecker,
 	}
 }
 
@@ -44,6 +56,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleRoot)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /readyz", s.handleReadiness)
 	mux.HandleFunc("GET /api/v1/telemetry", s.handleListTelemetry)
 	mux.HandleFunc("GET /api/v1/sensors/latest", s.handleListLatest)
 	mux.HandleFunc("GET /api/v1/sensors/{sensorID}/latest", s.handleGetLatest)
@@ -90,6 +103,23 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if s.readinessChecker == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := s.readinessChecker.Ready(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) handleListTelemetry(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +242,19 @@ func openAPISpec() map[string]any {
 					"responses": map[string]any{
 						"200": map[string]any{
 							"description": "Service is healthy",
+						},
+					},
+				},
+			},
+			"/readyz": map[string]any{
+				"get": map[string]any{
+					"summary": "Readiness check",
+					"responses": map[string]any{
+						"200": map[string]any{
+							"description": "Service dependencies are ready",
+						},
+						"503": map[string]any{
+							"description": "Service dependency is unavailable",
 						},
 					},
 				},

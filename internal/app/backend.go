@@ -59,7 +59,7 @@ func (a *Backend) Run(ctx context.Context) error {
 
 	subscriber, err := mqtttransport.NewSubscriber(mqtttransport.SubscriberConfig{
 		BrokerURL:          a.cfg.MQTTBrokerURL(),
-		ClientID:           a.cfg.MQTTClientID,
+		ClientID:           a.cfg.RuntimeMQTTClientID(),
 		Username:           a.cfg.MQTTUsername,
 		Password:           a.cfg.MQTTPassword,
 		Topic:              a.cfg.MQTTTopic,
@@ -72,7 +72,7 @@ func (a *Backend) Run(ctx context.Context) error {
 
 	publisher, err := mqtttransport.NewPublisher(mqtttransport.PublisherConfig{
 		BrokerURL: a.cfg.MQTTBrokerURL(),
-		ClientID:  a.cfg.MQTTClientID + "-commands",
+		ClientID:  a.cfg.RuntimeMQTTClientID() + "-commands",
 		Username:  a.cfg.MQTTUsername,
 		Password:  a.cfg.MQTTPassword,
 	}, a.logger)
@@ -82,22 +82,67 @@ func (a *Backend) Run(ctx context.Context) error {
 	defer publisher.Close()
 
 	commandService := deviceusecase.NewCommandService(publisher, a.cfg.MQTTCommandTopic)
-	httpServer := httptransport.NewServer(a.cfg.HTTPAddr, a.logger, queryService, commandService)
+	readiness := backendReadiness{
+		pgPool:      pgPool,
+		redisClient: redisClient,
+		subscriber:  subscriber,
+		publisher:   publisher,
+	}
+	httpServer := httptransport.NewServer(a.cfg.HTTPAddr, a.logger, queryService, commandService, readiness)
 
 	a.logger.Info("backend started")
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	errCh := make(chan error, 2)
 
 	go func() {
-		errCh <- subscriber.Start(ctx)
+		errCh <- subscriber.Start(runCtx)
 	}()
 
 	go func() {
-		errCh <- httpServer.Start(ctx)
+		errCh <- httpServer.Start(runCtx)
 	}()
 
-	if err := <-errCh; err != nil {
-		return fmt.Errorf("run backend services: %w", err)
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil && firstErr == nil {
+			firstErr = err
+		}
+
+		cancel()
+	}
+
+	if firstErr != nil {
+		return fmt.Errorf("run backend services: %w", firstErr)
+	}
+
+	return nil
+}
+
+type backendReadiness struct {
+	pgPool      *pgxpool.Pool
+	redisClient *goredis.Client
+	subscriber  *mqtttransport.Subscriber
+	publisher   *mqtttransport.Publisher
+}
+
+func (h backendReadiness) Ready(ctx context.Context) error {
+	if err := h.pgPool.Ping(ctx); err != nil {
+		return fmt.Errorf("postgres unavailable: %w", err)
+	}
+
+	if err := h.redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis unavailable: %w", err)
+	}
+
+	if h.subscriber == nil || !h.subscriber.IsConnected() {
+		return fmt.Errorf("mqtt subscriber disconnected")
+	}
+
+	if h.publisher == nil || !h.publisher.IsConnected() {
+		return fmt.Errorf("mqtt publisher disconnected")
 	}
 
 	return nil
@@ -112,7 +157,11 @@ func connectPostgres(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		}
 
 		lastErr = err
-		time.Sleep(2 * time.Second)
+		if attempt < 10 {
+			if err := waitForRetry(ctx, 2*time.Second); err != nil {
+				return nil, fmt.Errorf("postgres connection canceled: %w", err)
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("postgres unavailable after retries: %w", lastErr)
@@ -127,8 +176,24 @@ func connectRedis(ctx context.Context, addr, password string, db int) (*goredis.
 		}
 
 		lastErr = err
-		time.Sleep(2 * time.Second)
+		if attempt < 10 {
+			if err := waitForRetry(ctx, 2*time.Second); err != nil {
+				return nil, fmt.Errorf("redis connection canceled: %w", err)
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("redis unavailable after retries: %w", lastErr)
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

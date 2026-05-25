@@ -94,6 +94,10 @@ func (s *Subscriber) Start(ctx context.Context) error {
 	return nil
 }
 
+func (s *Subscriber) IsConnected() bool {
+	return s.client.IsConnected()
+}
+
 func (s *Subscriber) onMessage(ctx context.Context) pahomqtt.MessageHandler {
 	return func(_ pahomqtt.Client, message pahomqtt.Message) {
 		telemetry, ok, err := decodeTelemetry(message.Topic(), message.Payload(), s.decoder, s.sensorIDTopicLevel)

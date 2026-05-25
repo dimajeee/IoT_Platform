@@ -108,3 +108,7 @@ func (p *Publisher) PublishRaw(ctx context.Context, topic string, payload []byte
 func (p *Publisher) Close() {
 	p.client.Disconnect(250)
 }
+
+func (p *Publisher) IsConnected() bool {
+	return p.client.IsConnected()
+}

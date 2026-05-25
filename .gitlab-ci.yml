@@ -1,0 +1,38 @@
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  BACKEND_IMAGE_NAME: iot-backend-image
+
+build-job:
+  stage: build
+  tags:
+    - production
+  script:
+    - docker build -f build/backend/Dockerfile -t "$BACKEND_IMAGE_NAME:$CI_COMMIT_SHA" -t "$BACKEND_IMAGE_NAME:latest" .
+
+test-job:
+  stage: test
+  tags:
+    - production
+  script:
+    - go test ./...
+
+deploy-job:
+  stage: deploy
+  tags:
+    - production
+  needs:
+    - build-job
+    - test-job
+  script:
+    - test -n "$MQTT_HOST"
+    - test -n "$POSTGRES_PASSWORD"
+    - export BACKEND_IMAGE="$BACKEND_IMAGE_NAME:$CI_COMMIT_SHA"
+    - docker compose up -d --no-build --remove-orphans postgres redis backend
+  environment:
+    name: production
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

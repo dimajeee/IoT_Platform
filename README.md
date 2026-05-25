@@ -62,6 +62,58 @@ docker compose up --build
 
 MQTT broker теперь внешний. Его host, port, username и password задаются в `.env`.
 
+## GitLab Runner deploy
+
+Целевая production-схема состоит только из:
+
+- `backend`
+- `redis`
+- `postgresql`
+
+MQTT broker остается внешним. Деплой идет напрямую через GitLab Runner на сервере, без Minikube, Helm и Argo CD.
+
+Файлы деплоя:
+
+- GitLab CI pipeline: `.gitlab-ci.yml`
+- Docker Compose: `docker-compose.yml`
+- Backend Dockerfile: `build/backend/Dockerfile`
+
+Pipeline делает:
+
+1. сборку одного Docker image: `docker build -f build/backend/Dockerfile -t iot-backend-image:<commit> .`
+2. `go test ./...`
+3. deploy через shell GitLab Runner на сервере
+
+Jobs ожидают shell runner с тегом `production`, установленными `go`, `docker` и `docker compose`, а также правом запускать Docker команды. Build и deploy должны выполняться на том же сервере или на runner с тем же Docker daemon, потому что image не пушится в registry, а используется локально.
+
+Deploy job выполняет:
+
+```bash
+docker compose up -d --no-build --remove-orphans postgres redis backend
+```
+
+Минимальные GitLab CI/CD variables для deploy job:
+
+- `MQTT_HOST`
+- `MQTT_PORT`
+- `MQTT_USERNAME`
+- `MQTT_PASSWORD`
+- `POSTGRES_PASSWORD`
+
+Опциональные variables:
+
+- `REDIS_PASSWORD`
+- `BACKEND_HTTP_PORT`
+- `BACKEND_LOG_LEVEL`
+- `MQTT_TOPIC`
+- `MQTT_DECODER`
+- `MQTT_SENSOR_ID_TOPIC_POS`
+- `MQTT_COMMAND_TOPIC`
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+
+В этой схеме backend деплоится в один контейнер. Два backend-инстанса через обычный Docker Compose возможны только после добавления балансировщика перед backend и MQTT shared subscriptions, иначе будет конфликт по порту или дублирование telemetry-сообщений.
+
 ## MQTT config
 
 Создайте `.env` из примера:
@@ -195,6 +247,7 @@ http://localhost:8080/openapi.json
 
 ```text
 GET /healthz
+GET /readyz
 ```
 
 ### История телеметрии
@@ -308,6 +361,7 @@ go build ./cmd/hardware-gateway
 - `BACKEND_MQTT_USERNAME`
 - `BACKEND_MQTT_PASSWORD`
 - `BACKEND_MQTT_CLIENT_ID`
+- `BACKEND_INSTANCE_ID`
 - `BACKEND_MQTT_TOPIC`
 - `BACKEND_MQTT_DECODER`
 - `BACKEND_MQTT_SENSOR_ID_TOPIC_POS`

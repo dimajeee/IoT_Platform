@@ -4,12 +4,17 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/dmitrijsterligov/iot-platform/internal/app"
 	"github.com/dmitrijsterligov/iot-platform/internal/config"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.MustLoadHardwareGateway()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 
@@ -19,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := application.Run(context.Background()); err != nil {
+	if err := application.Run(ctx); err != nil {
 		logger.Error("hardware gateway stopped with error", slog.Any("error", err))
 		os.Exit(1)
 	}
